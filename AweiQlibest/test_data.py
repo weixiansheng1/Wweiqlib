@@ -4,7 +4,12 @@ Created on Sun Nov  9 15:06:22 2025
 
 @author: 11298
 """
+#==================下载数据================
+#进入scrip文件夹，阅读README 文件，在里面复制命令后运行，注意要cd进入后再使用cmd命令下载数据
 
+# python get_data.py qlib_data --target_dir D:/AIquanter/WweiqlibData/qlib_data/cn_data --region cn
+
+#==================测试数据==============
 import qlib
 from qlib.data import D
 
