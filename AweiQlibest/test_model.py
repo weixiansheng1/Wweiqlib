@@ -36,11 +36,22 @@ from qlib.backtest import backtest
 from qlib.utils import init_instance_by_config
 from qlib.model.trainer import TrainerR
 
-# 抑制警告信息
-warnings.filterwarnings('ignore')
+import torch
+
+
 
 def initialize_qlib():
+    
     """初始化Qlib环境"""
+    #验证CPU版本
+    print("PyTorch版本:", torch.__version__)
+    print("CPU支持:", torch.cpu.is_available())
+
+    #验证GPU版本（如有）
+    if torch.cuda.is_available():
+        print(f"GPU设备: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA版本: {torch.version.cuda}")
+
     print("🚀 初始化Qlib环境...")
     try:
         # 初始化Qlib，使用本地数据

@@ -1,92 +1,105 @@
-
-# init qlib
-
 from pprint import pprint
 import pandas as pd
+import numpy as np
+import qlib
 from qlib.utils.time import Freq
 from qlib.utils import flatten_dict
-from qlib.backtest import backtest, executor
+from qlib.contrib.evaluate import backtest_daily
 from qlib.contrib.evaluate import risk_analysis
 from qlib.contrib.strategy import TopkDropoutStrategy
-from qlib.data import D  # 补充导入
-from qlib import init
+from qlib.data import D  # 用于获取股票列表和日历
 
-# 1. 初始化Qlib（确保数据存在）
-init(provider_uri="~/.qlib/qlib_data/cn_data")
 
-# 2. 定义常量和配置
-CSI300_BENCH = "SH000300"
+# 1. 初始化Qlib（确保数据路径正确）
+qlib.init(provider_uri="~/.qlib/qlib_data/cn_data")
+
+# 2. 定义常量
+CSI300_BENCH = "SH000300"  # 基准指数
+START_TIME = "2017-01-01"
+END_TIME = "2020-08-01"
 FREQ = "day"
 
-# 3. 生成预测分数 pred_score（关键步骤，需根据实际模型替换）
-# 示例：假设从测试数据中获取（实际需用模型预测）
-# 这里仅为演示，实际需替换为你的模型预测结果
+
+# 3. 生成预测信号 pred_score（关键步骤）
+# 说明：实际应用中需替换为模型的预测结果（如LightGBM/XGBoost的输出）
+# 此处用随机数据模拟，格式为 pd.Series，索引为 (datetime, instrument) 的 MultiIndex
 def generate_pred_score():
-    # 假设选取CSI300成分股作为示例
-    instruments = D.instruments(market="csi300")
-    # 用随机数模拟预测分数（实际需替换为模型输出）
-    dates = pd.date_range(start="2017-01-01", end="2020-08-01", freq="D")
-    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
-    pred_score = pd.Series(range(len(index)), index=index, name="score")
+    # 获取CSI300成分股作为股票池
+    instruments = D.instruments(market="csi300")  # 从数据中获取沪深300成分股
+    if not instruments:
+        raise ValueError("未获取到股票列表，请检查数据是否正确加载")
+    
+    # 获取回测时间范围内的交易日历
+    cal = D.calendar(start_time=START_TIME, end_time=END_TIME, freq=FREQ)
+    if len(cal) == 0:
+        raise ValueError("未获取到交易日历，请检查数据是否完整")
+    
+    # 构造 MultiIndex（datetime, instrument）
+    index = pd.MultiIndex.from_product(
+        [cal, instruments],
+        names=["datetime", "instrument"]
+    )
+    
+    # 生成随机预测分数（替代模型预测，实际应替换为真实预测结果）
+    np.random.seed(42)  # 固定随机种子，确保结果可复现
+    pred_score = pd.Series(
+        np.random.randn(len(index)),  # 随机正态分布分数（越高表示越看好）
+        index=index,
+        name="pred_score"
+    )
     return pred_score
 
-pred_score = generate_pred_score()  # 生成信号
 
-# 4. 策略、执行器、回测配置
+# 生成信号（必须在策略初始化前完成）
+pred_score = generate_pred_score()
+
+
+# 4. 策略配置
 STRATEGY_CONFIG = {
     "topk": 50,          # 选取预测分数前50的股票
-    "n_drop": 5,         # 每次调仓剔除5只股票
-    "signal": pred_score,  # 传入预测分数
+    "n_drop": 5,         # 每次调仓剔除5只股票（避免过度交易）
+    "signal": pred_score,  # 传入生成的预测信号
 }
 
-EXECUTOR_CONFIG = {
-    "time_per_step": "day",  # 每日调仓
-    "generate_portfolio_metrics": True,  # 生成组合指标
-}
 
-backtest_config = {
-    "start_time": "2017-01-01",
-    "end_time": "2020-08-01",
-    "account": 100000000,  # 初始资金
-    "benchmark": CSI300_BENCH,  # 基准指数
-    "exchange_kwargs": {
-        "freq": FREQ,
-        "limit_threshold": 0.095,  # 涨跌停限制
-        "deal_price": "close",  # 以收盘价成交
-        "open_cost": 0.0005,    # 开仓手续费
-        "close_cost": 0.0015,   # 平仓手续费
-        "min_cost": 5,          # 最低手续费
-    },
-}
-
-# 5. 执行回测
+# 5. 初始化策略
 strategy_obj = TopkDropoutStrategy(** STRATEGY_CONFIG)
-executor_obj = executor.SimulatorExecutor(**EXECUTOR_CONFIG)
-portfolio_metric_dict, indicator_dict = backtest(
-    executor=executor_obj,
-    strategy=strategy_obj,** backtest_config
+
+
+# 6. 执行回测（补充必要参数）
+report_normal, positions_normal = backtest_daily(
+    start_time=START_TIME,
+    end_time=END_TIME,
+    strategy=strategy_obj,
+    benchmark=CSI300_BENCH,  # 基准指数
+    account=100000000,      # 初始资金（1亿）
+    # 交易成本配置（与实际市场匹配）
+    exchange_kwargs={
+        "freq": FREQ,
+        "limit_threshold": 0.095,  # 涨跌停限制（9.5%）
+        "deal_price": "close",     # 以收盘价成交
+        "open_cost": 0.0005,       # 开仓手续费（0.05%）
+        "close_cost": 0.0015,      # 平仓手续费（0.15%）
+        "min_cost": 5,             # 最低手续费（5元）
+    },
 )
 
-# 6. 结果分析
-analysis_freq = "{0}{1}".format(*Freq.parse(FREQ))
-report_normal, positions_normal = portfolio_metric_dict.get(analysis_freq)
 
+# 7. 结果分析
 analysis = {
+    # 无手续费的超额收益（策略收益 - 基准收益）
     "excess_return_without_cost": risk_analysis(
-        report_normal["return"] - report_normal["bench"], freq=analysis_freq
+        report_normal["return"] - report_normal["bench"],
+        freq=FREQ
     ),
+    # 含手续费的超额收益（扣除交易成本后）
     "excess_return_with_cost": risk_analysis(
-        report_normal["return"] - report_normal["bench"] - report_normal["cost"], freq=analysis_freq
+        report_normal["return"] - report_normal["bench"] - report_normal["cost"],
+        freq=FREQ
     ),
 }
 
+# 合并分析结果并打印
 analysis_df = pd.concat(analysis)
-analysis_dict = flatten_dict(analysis_df["risk"].unstack().T.to_dict())
-
-# 打印结果
-print(f"基准收益分析 ({analysis_freq}):")
-pprint(risk_analysis(report_normal["bench"], freq=analysis_freq))
-print(f"\n无手续费超额收益分析 ({analysis_freq}):")
-pprint(analysis["excess_return_without_cost"])
-print(f"\n含手续费超额收益分析 ({analysis_freq}):")
-pprint(analysis["excess_return_with_cost"])
+print("回测结果分析：")
+pprint(analysis_df)
